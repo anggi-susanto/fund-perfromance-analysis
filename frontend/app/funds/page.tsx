@@ -2,15 +2,32 @@
 
 import { useQuery } from '@tanstack/react-query'
 import Link from 'next/link'
-import { fundApi } from '@/lib/api'
+import { fundApi, documentApi } from '@/lib/api'
 import { formatCurrency, formatPercentage } from '@/lib/utils'
-import { TrendingUp, TrendingDown, ArrowRight, Loader2 } from 'lucide-react'
+import { TrendingUp, TrendingDown, ArrowRight, Loader2, MessageSquare, FileText } from 'lucide-react'
 
 export default function FundsPage() {
   const { data: funds, isLoading, error } = useQuery({
     queryKey: ['funds'],
     queryFn: () => fundApi.list()
   })
+
+  // Calculate portfolio summary
+  const portfolioSummary = funds?.reduce((acc: any, fund: any) => {
+    const metrics = fund.metrics || {}
+    return {
+      totalPIC: (acc.totalPIC || 0) + (metrics.pic || 0),
+      totalDistributions: (acc.totalDistributions || 0) + (metrics.total_distributions || 0),
+      fundCount: (acc.fundCount || 0) + 1,
+      avgDPI: (acc.avgDPI || 0) + (metrics.dpi || 0),
+      avgIRR: (acc.avgIRR || 0) + (metrics.irr || 0),
+    }
+  }, {})
+
+  if (portfolioSummary && funds) {
+    portfolioSummary.avgDPI = portfolioSummary.avgDPI / funds.length
+    portfolioSummary.avgIRR = portfolioSummary.avgIRR / funds.length
+  }
 
   if (isLoading) {
     return (
@@ -37,13 +54,48 @@ export default function FundsPage() {
             View and analyze your fund investments
           </p>
         </div>
-        <Link
-          href="/upload"
-          className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
-        >
-          Add New Fund
-        </Link>
+        <div className="flex space-x-3">
+          <Link
+            href="/documents"
+            className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition flex items-center space-x-2"
+          >
+            <FileText className="w-4 h-4" />
+            <span>Documents</span>
+          </Link>
+          <Link
+            href="/upload"
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+          >
+            Upload Document
+          </Link>
+        </div>
       </div>
+
+      {/* Portfolio Summary */}
+      {portfolioSummary && funds && funds.length > 0 && (
+        <div className="grid md:grid-cols-4 gap-6 mb-8">
+          <SummaryCard
+            title="Total Funds"
+            value={portfolioSummary.fundCount.toString()}
+            subtitle="Active funds"
+          />
+          <SummaryCard
+            title="Total PIC"
+            value={formatCurrency(portfolioSummary.totalPIC)}
+            subtitle="Paid-in capital"
+          />
+          <SummaryCard
+            title="Avg DPI"
+            value={portfolioSummary.avgDPI.toFixed(2) + 'x'}
+            subtitle="Portfolio average"
+          />
+          <SummaryCard
+            title="Avg IRR"
+            value={formatPercentage(portfolioSummary.avgIRR)}
+            subtitle="Portfolio average"
+          />
+        </div>
+      )}
 
       {funds && funds.length === 0 ? (
         <div className="bg-white rounded-lg shadow-md p-12 text-center">
@@ -66,50 +118,81 @@ export default function FundsPage() {
   )
 }
 
+function SummaryCard({ title, value, subtitle }: {
+  title: string
+  value: string
+  subtitle: string
+}) {
+  return (
+    <div className="bg-white rounded-lg shadow-md p-6">
+      <h3 className="text-sm font-medium text-gray-600 mb-1">{title}</h3>
+      <p className="text-xl md:text-2xl font-bold text-gray-900 mb-1 break-words">{value}</p>
+      <p className="text-xs text-gray-500">{subtitle}</p>
+    </div>
+  )
+}
+
 function FundCard({ fund }: { fund: any }) {
   const metrics = fund.metrics || {}
   const dpi = metrics.dpi || 0
   const irr = metrics.irr || 0
+  const tvpi = metrics.tvpi || (dpi + (metrics.nav || 0) / (metrics.pic || 1))
 
   return (
-    <Link href={`/funds/${fund.id}`}>
-      <div className="bg-white rounded-lg shadow-md hover:shadow-lg transition p-6 h-full">
-        <div className="mb-4">
-          <h3 className="text-xl font-semibold text-gray-900 mb-1">
-            {fund.name}
-          </h3>
-          {fund.gp_name && (
-            <p className="text-sm text-gray-600">GP: {fund.gp_name}</p>
-          )}
-          {fund.vintage_year && (
-            <p className="text-sm text-gray-500">Vintage: {fund.vintage_year}</p>
-          )}
-        </div>
-
-        <div className="space-y-3 mb-4">
-          <MetricRow
-            label="DPI"
-            value={dpi.toFixed(2) + 'x'}
-            positive={dpi >= 1}
-          />
-          <MetricRow
-            label="IRR"
-            value={formatPercentage(irr)}
-            positive={irr >= 0}
-          />
-          {metrics.pic > 0 && (
-            <MetricRow
-              label="Paid-In Capital"
-              value={formatCurrency(metrics.pic)}
-            />
-          )}
-        </div>
-
-        <div className="flex items-center text-blue-600 text-sm font-medium">
-          View Details <ArrowRight className="w-4 h-4 ml-1" />
-        </div>
+    <div className="bg-white rounded-lg shadow-md hover:shadow-lg transition p-6 h-full flex flex-col">
+      <div className="mb-4">
+        <h3 className="text-xl font-semibold text-gray-900 mb-1">
+          {fund.name}
+        </h3>
+        {fund.gp_name && (
+          <p className="text-sm text-gray-600">GP: {fund.gp_name}</p>
+        )}
+        {fund.vintage_year && (
+          <p className="text-sm text-gray-500">Vintage: {fund.vintage_year}</p>
+        )}
       </div>
-    </Link>
+
+      <div className="space-y-3 mb-4 flex-1">
+        <MetricRow
+          label="DPI"
+          value={dpi.toFixed(2) + 'x'}
+          positive={dpi >= 1}
+        />
+        <MetricRow
+          label="IRR"
+          value={formatPercentage(irr)}
+          positive={irr >= 0}
+        />
+        <MetricRow
+          label="TVPI"
+          value={tvpi.toFixed(2) + 'x'}
+          positive={tvpi >= 1}
+        />
+        {metrics.pic > 0 && (
+          <MetricRow
+            label="Paid-In Capital"
+            value={formatCurrency(metrics.pic)}
+          />
+        )}
+      </div>
+
+      <div className="flex items-center space-x-2 pt-4 border-t">
+        <Link
+          href={`/funds/${fund.id}`}
+          className="flex-1 flex items-center justify-center px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition text-sm"
+        >
+          <span>View Details</span>
+          <ArrowRight className="w-4 h-4 ml-1" />
+        </Link>
+        <Link
+          href={`/chat?fund=${fund.id}`}
+          className="p-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition"
+          title="Chat about this fund"
+        >
+          <MessageSquare className="w-4 h-4" />
+        </Link>
+      </div>
+    </div>
   )
 }
 

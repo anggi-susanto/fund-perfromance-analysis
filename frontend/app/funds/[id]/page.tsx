@@ -2,6 +2,7 @@
 
 import { useQuery } from '@tanstack/react-query'
 import { useParams } from 'next/navigation'
+import Link from 'next/link'
 import { fundApi } from '@/lib/api'
 import { formatCurrency, formatPercentage, formatDate } from '@/lib/utils'
 import { Loader2, TrendingUp, DollarSign, Calendar } from 'lucide-react'
@@ -25,6 +26,11 @@ export default function FundDetailPage() {
     queryFn: () => fundApi.getTransactions(fundId, 'distributions', 1, 10)
   })
 
+  const { data: adjustments } = useQuery({
+    queryKey: ['transactions', fundId, 'adjustments'],
+    queryFn: () => fundApi.getTransactions(fundId, 'adjustments', 1, 10)
+  })
+
   if (fundLoading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -43,16 +49,34 @@ export default function FundDetailPage() {
     <div className="max-w-7xl mx-auto">
       {/* Header */}
       <div className="mb-8">
-        <h1 className="text-4xl font-bold mb-2">{fund.name}</h1>
-        <div className="flex items-center space-x-4 text-gray-600">
-          {fund.gp_name && <span>GP: {fund.gp_name}</span>}
-          {fund.vintage_year && <span>Vintage: {fund.vintage_year}</span>}
-          {fund.fund_type && <span>Type: {fund.fund_type}</span>}
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h1 className="text-4xl font-bold mb-2">{fund.name}</h1>
+            <div className="flex items-center space-x-4 text-gray-600">
+              {fund.gp_name && <span>GP: {fund.gp_name}</span>}
+              {fund.vintage_year && <span>Vintage: {fund.vintage_year}</span>}
+              {fund.fund_type && <span>Type: {fund.fund_type}</span>}
+            </div>
+          </div>
+          <div className="flex space-x-3">
+            <Link
+              href={`/chat?fund=${fundId}`}
+              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+            >
+              Ask Questions
+            </Link>
+            <Link
+              href="/documents"
+              className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition"
+            >
+              View Documents
+            </Link>
+          </div>
         </div>
       </div>
 
       {/* Metrics Cards */}
-      <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+      <div className="grid md:grid-cols-2 lg:grid-cols-5 gap-6 mb-8">
         <MetricCard
           title="DPI"
           value={metrics.dpi?.toFixed(2) + 'x' || 'N/A'}
@@ -66,6 +90,13 @@ export default function FundDetailPage() {
           description="Internal Rate of Return"
           icon={<TrendingUp className="w-6 h-6" />}
           color="green"
+        />
+        <MetricCard
+          title="TVPI"
+          value={metrics.tvpi?.toFixed(2) + 'x' || 'N/A'}
+          description="Total Value to Paid-In"
+          icon={<TrendingUp className="w-6 h-6" />}
+          color="indigo"
         />
         <MetricCard
           title="Paid-In Capital"
@@ -84,7 +115,7 @@ export default function FundDetailPage() {
       </div>
 
       {/* Transactions Tables */}
-      <div className="grid lg:grid-cols-2 gap-6">
+      <div className="grid lg:grid-cols-3 gap-6">
         {/* Capital Calls */}
         <div className="bg-white rounded-lg shadow-md p-6">
           <h2 className="text-xl font-semibold mb-4">Recent Capital Calls</h2>
@@ -124,6 +155,26 @@ export default function FundDetailPage() {
             <p className="text-gray-500 text-sm">No distributions found</p>
           )}
         </div>
+
+        {/* Adjustments */}
+        <div className="bg-white rounded-lg shadow-md p-6">
+          <h2 className="text-xl font-semibold mb-4">Recent Adjustments</h2>
+          {adjustments && adjustments.items.length > 0 ? (
+            <div className="space-y-3">
+              {adjustments.items.map((adj: any) => (
+                <TransactionRow
+                  key={adj.id}
+                  date={adj.adjustment_date}
+                  type={adj.adjustment_type}
+                  amount={adj.amount}
+                  category={adj.category}
+                />
+              ))}
+            </div>
+          ) : (
+            <p className="text-gray-500 text-sm">No adjustments found</p>
+          )}
+        </div>
       </div>
     </div>
   )
@@ -134,13 +185,14 @@ function MetricCard({ title, value, description, icon, color }: {
   value: string
   description: string
   icon: React.ReactNode
-  color: 'blue' | 'green' | 'purple' | 'orange'
+  color: 'blue' | 'green' | 'purple' | 'orange' | 'indigo'
 }) {
   const colorClasses = {
     blue: 'bg-blue-100 text-blue-600',
     green: 'bg-green-100 text-green-600',
     purple: 'bg-purple-100 text-purple-600',
     orange: 'bg-orange-100 text-orange-600',
+    indigo: 'bg-indigo-100 text-indigo-600',
   }
 
   return (
@@ -155,23 +207,31 @@ function MetricCard({ title, value, description, icon, color }: {
   )
 }
 
-function TransactionRow({ date, type, amount, isNegative, isRecallable }: {
+function TransactionRow({ date, type, amount, isNegative, isRecallable, category }: {
   date: string
   type: string
   amount: number
   isNegative?: boolean
   isRecallable?: boolean
+  category?: string
 }) {
   return (
     <div className="flex items-center justify-between py-2 border-b border-gray-100 last:border-0">
       <div className="flex-1">
         <p className="text-sm font-medium text-gray-900">{type}</p>
-        <div className="flex items-center space-x-2 mt-1">
-          <Calendar className="w-3 h-3 text-gray-400" />
-          <p className="text-xs text-gray-500">{formatDate(date)}</p>
+        <div className="flex items-center flex-wrap gap-2 mt-1">
+          <div className="flex items-center space-x-1">
+            <Calendar className="w-3 h-3 text-gray-400" />
+            <p className="text-xs text-gray-500">{formatDate(date)}</p>
+          </div>
           {isRecallable && (
             <span className="text-xs bg-yellow-100 text-yellow-800 px-2 py-0.5 rounded">
               Recallable
+            </span>
+          )}
+          {category && (
+            <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded">
+              {category}
             </span>
           )}
         </div>

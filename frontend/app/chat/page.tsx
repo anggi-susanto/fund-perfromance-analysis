@@ -1,8 +1,8 @@
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
-import { Send, Loader2, FileText } from 'lucide-react'
-import { chatApi } from '@/lib/api'
+import { Send, Loader2, FileText, Copy, Check } from 'lucide-react'
+import { chatApi, fundApi } from '@/lib/api'
 import { formatCurrency } from '@/lib/utils'
 
 interface Message {
@@ -13,19 +13,44 @@ interface Message {
   timestamp: Date
 }
 
+interface Fund {
+  id: number
+  name: string
+  vintage_year?: number
+}
+
 export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [conversationId, setConversationId] = useState<string>()
+  const [selectedFund, setSelectedFund] = useState<number | undefined>()
+  const [funds, setFunds] = useState<Fund[]>([])
+  const [loadingFunds, setLoadingFunds] = useState(true)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    // Create conversation on mount
-    chatApi.createConversation().then(conv => {
-      setConversationId(conv.conversation_id)
+    // Load funds
+    fundApi.list().then(data => {
+      setFunds(data)
+      if (data.length > 0) {
+        setSelectedFund(data[0].id)
+      }
+      setLoadingFunds(false)
+    }).catch(error => {
+      console.error('Failed to load funds:', error)
+      setLoadingFunds(false)
     })
   }, [])
+
+  useEffect(() => {
+    // Create conversation when fund is selected
+    if (selectedFund) {
+      chatApi.createConversation(selectedFund).then(conv => {
+        setConversationId(conv.conversation_id)
+      })
+    }
+  }, [selectedFund])
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -46,7 +71,7 @@ export default function ChatPage() {
     setLoading(true)
 
     try {
-      const response = await chatApi.query(input, undefined, conversationId)
+      const response = await chatApi.query(input, selectedFund, conversationId)
       
       const assistantMessage: Message = {
         role: 'assistant',
@@ -71,11 +96,45 @@ export default function ChatPage() {
 
   return (
     <div className="max-w-5xl mx-auto h-[calc(100vh-12rem)]">
-      <div className="mb-4">
-        <h1 className="text-4xl font-bold mb-2">Fund Analysis Chat</h1>
-        <p className="text-gray-600">
-          Ask questions about fund performance, metrics, and transactions
-        </p>
+      <div className="mb-4 flex items-center justify-between">
+        <div>
+          <h1 className="text-4xl font-bold mb-2">Fund Analysis Chat</h1>
+          <p className="text-gray-600">
+            Ask questions about fund performance, metrics, and transactions
+          </p>
+        </div>
+        
+        {/* Fund Selector */}
+        <div className="w-64">
+          <label className="block text-sm font-medium text-gray-700 mb-2">
+            Select Fund
+          </label>
+          {loadingFunds ? (
+            <div className="flex items-center space-x-2 text-gray-500">
+              <Loader2 className="w-4 h-4 animate-spin" />
+              <span className="text-sm">Loading funds...</span>
+            </div>
+          ) : (
+            <select
+              value={selectedFund || ''}
+              onChange={(e) => {
+                setSelectedFund(Number(e.target.value))
+                setMessages([]) // Clear messages when changing fund
+              }}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              disabled={funds.length === 0}
+            >
+              {funds.length === 0 && (
+                <option value="">No funds available</option>
+              )}
+              {funds.map((fund) => (
+                <option key={fund.id} value={fund.id}>
+                  {fund.name} {fund.vintage_year && `(${fund.vintage_year})`}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
       </div>
 
       <div className="bg-white rounded-lg shadow-md flex flex-col h-full">
@@ -151,6 +210,13 @@ export default function ChatPage() {
 
 function MessageBubble({ message }: { message: Message }) {
   const isUser = message.role === 'user'
+  const [copied, setCopied] = useState(false)
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(message.content)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
 
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
@@ -162,7 +228,22 @@ function MessageBubble({ message }: { message: Message }) {
               : 'bg-gray-100 text-gray-900'
           }`}
         >
-          <p className="whitespace-pre-wrap">{message.content}</p>
+          <div className="flex items-start justify-between gap-3">
+            <p className="whitespace-pre-wrap flex-1">{message.content}</p>
+            {!isUser && (
+              <button
+                onClick={handleCopy}
+                className="flex-shrink-0 p-1 hover:bg-gray-200 rounded transition"
+                title="Copy message"
+              >
+                {copied ? (
+                  <Check className="w-4 h-4 text-green-600" />
+                ) : (
+                  <Copy className="w-4 h-4 text-gray-600" />
+                )}
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Metrics Display */}
