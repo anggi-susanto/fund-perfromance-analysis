@@ -5,7 +5,7 @@ from typing import Dict, Any, List, Optional
 import time
 from langchain_openai import ChatOpenAI
 from langchain_community.llms import Ollama
-from langchain.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate
 from app.core.config import settings
 from app.services.vector_store import VectorStore
 from app.services.metrics_calculator import MetricsCalculator
@@ -22,16 +22,72 @@ class QueryEngine:
         self.llm = self._initialize_llm()
     
     def _initialize_llm(self):
-        """Initialize LLM"""
-        if settings.OPENAI_API_KEY:
-            return ChatOpenAI(
-                model=settings.OPENAI_MODEL,
-                temperature=0,
-                openai_api_key=settings.OPENAI_API_KEY
-            )
-        else:
-            # Fallback to local LLM
-            return Ollama(model="llama2")
+        """Initialize LLM based on configured provider"""
+        provider = getattr(settings, 'LLM_PROVIDER', 'groq')
+        
+        # Try Groq first (free, fast, cloud-based)
+        if provider == "groq":
+            groq_key = getattr(settings, 'GROQ_API_KEY', '')
+            if groq_key:
+                try:
+                    print(f"Using Groq LLM ({settings.GROQ_MODEL})...")
+                    from langchain_groq import ChatGroq
+                    return ChatGroq(
+                        api_key=groq_key,
+                        model=settings.GROQ_MODEL,
+                        temperature=0
+                    )
+                except ImportError:
+                    print("langchain-groq not installed. Installing...")
+                    import subprocess
+                    subprocess.run(["pip", "install", "langchain-groq"], check=False)
+                    try:
+                        from langchain_groq import ChatGroq
+                        return ChatGroq(
+                            api_key=groq_key,
+                            model=settings.GROQ_MODEL,
+                            temperature=0
+                        )
+                    except Exception as e:
+                        print(f"Failed to initialize Groq: {e}")
+                except Exception as e:
+                    print(f"Failed to initialize Groq: {e}")
+        
+        # Try OpenAI if available
+        if provider == "openai" and settings.OPENAI_API_KEY:
+            try:
+                print("Using OpenAI LLM...")
+                return ChatOpenAI(
+                    model=settings.OPENAI_MODEL,
+                    temperature=0,
+                    openai_api_key=settings.OPENAI_API_KEY
+                )
+            except Exception as e:
+                print(f"Failed to initialize OpenAI: {e}")
+        
+        # Try Ollama (local)
+        if provider == "ollama":
+            try:
+                print(f"Using Ollama LLM ({settings.OLLAMA_MODEL})...")
+                return Ollama(
+                    base_url=settings.OLLAMA_BASE_URL,
+                    model=settings.OLLAMA_MODEL
+                )
+            except Exception as e:
+                print(f"Failed to connect to Ollama: {e}")
+        
+        # No LLM available
+        print("\n⚠️  WARNING: No LLM configured!")
+        print("Please configure one of the following:")
+        print("  1. Groq (Recommended - Free & Fast):")
+        print("     - Sign up: https://console.groq.com")
+        print("     - Add GROQ_API_KEY to .env")
+        print("  2. OpenAI (Paid):")
+        print("     - Add OPENAI_API_KEY to .env")
+        print("  3. Ollama (Local - Requires good hardware):")
+        print("     - brew install ollama")
+        print("     - ollama pull llama3.2")
+        return None
     
     async def process_query(
         self, 

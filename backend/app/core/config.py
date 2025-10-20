@@ -36,6 +36,20 @@ class Settings(BaseSettings):
     # Anthropic (optional)
     ANTHROPIC_API_KEY: str = ""
     
+    # Groq (Free, Fast - RECOMMENDED)
+    GROQ_API_KEY: str = ""
+    GROQ_MODEL: str = "mixtral-8x7b-32768"  # or "llama3-70b-8192"
+    
+    # LLM Provider: "openai", "ollama", "groq", or "huggingface"
+    LLM_PROVIDER: str = "groq"  # Default to Groq (free, fast, cloud)
+    
+    # Ollama Configuration (free, local - but requires good hardware)
+    OLLAMA_BASE_URL: str = "http://host.docker.internal:11434"
+    OLLAMA_MODEL: str = "llama3.2"
+    
+    # Embedding Provider: "openai" or "local"
+    EMBEDDING_PROVIDER: str = "local"  # Use local embeddings (free)
+    
     # Vector Store
     VECTOR_STORE_PATH: str = "./vector_store"
     FAISS_INDEX_PATH: str = "./faiss_index"

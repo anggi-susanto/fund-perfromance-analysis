@@ -12,7 +12,7 @@ import numpy as np
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from langchain_openai import OpenAIEmbeddings
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 from app.core.config import settings
 from app.db.session import SessionLocal
 
@@ -27,16 +27,25 @@ class VectorStore:
     
     def _initialize_embeddings(self):
         """Initialize embedding model"""
-        if settings.OPENAI_API_KEY:
-            return OpenAIEmbeddings(
-                model=settings.OPENAI_EMBEDDING_MODEL,
-                openai_api_key=settings.OPENAI_API_KEY
-            )
-        else:
-            # Fallback to local embeddings
-            return HuggingFaceEmbeddings(
-                model_name="sentence-transformers/all-MiniLM-L6-v2"
-            )
+        # Check embedding provider setting
+        provider = getattr(settings, 'EMBEDDING_PROVIDER', 'local')
+        
+        if provider == "openai" and settings.OPENAI_API_KEY:
+            try:
+                print("Using OpenAI embeddings...")
+                return OpenAIEmbeddings(
+                    model=settings.OPENAI_EMBEDDING_MODEL,
+                    openai_api_key=settings.OPENAI_API_KEY
+                )
+            except Exception as e:
+                print(f"Failed to initialize OpenAI embeddings: {e}")
+                print("Falling back to local embeddings...")
+        
+        # Fallback to local embeddings (free, no API key needed)
+        print("Using local HuggingFace embeddings (sentence-transformers)...")
+        return HuggingFaceEmbeddings(
+            model_name="sentence-transformers/all-MiniLM-L6-v2"
+        )
     
     def _ensure_extension(self):
         """

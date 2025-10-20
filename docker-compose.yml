@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   postgres:
     image: pgvector/pgvector:pg15
@@ -37,6 +35,8 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: fund-backend
+    env_file:
+      - .env
     ports:
       - "8000:8000"
     environment:
@@ -56,7 +56,7 @@ services:
         condition: service_healthy
     command: >
       sh -c "
-        python app/db/init_db.py &&
+        python -m app.db.init_db &&
         uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
       "
 
