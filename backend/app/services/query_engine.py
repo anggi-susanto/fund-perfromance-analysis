@@ -3,6 +3,8 @@ Query engine service for RAG-based question answering
 """
 from typing import Dict, Any, List, Optional
 import time
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from langchain_openai import ChatOpenAI
 from langchain_community.llms import Ollama
 from langchain_core.prompts import ChatPromptTemplate
@@ -10,6 +12,9 @@ from app.core.config import settings
 from app.services.vector_store import VectorStore
 from app.services.metrics_calculator import MetricsCalculator
 from sqlalchemy.orm import Session
+
+# Thread pool for blocking LLM calls
+_llm_thread_pool = ThreadPoolExecutor(max_workers=4)
 
 
 class QueryEngine:
@@ -255,7 +260,10 @@ Please provide a helpful answer based on the context and metrics provided.""")
         )
         
         try:
-            response = self.llm.invoke(messages)
+            # Run blocking LLM call in thread pool
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(_llm_thread_pool, self.llm.invoke, messages)
+            
             if hasattr(response, 'content'):
                 return response.content
             return str(response)

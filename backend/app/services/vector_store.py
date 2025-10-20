@@ -13,8 +13,15 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from langchain_openai import OpenAIEmbeddings
 from langchain_huggingface import HuggingFaceEmbeddings
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from app.core.config import settings
 from app.db.session import SessionLocal
+
+# Global cache for embedding model (loaded once, reused across requests)
+_embeddings_cache = None
+_embeddings_lock = None
+_thread_pool = ThreadPoolExecutor(max_workers=4)  # Thread pool for blocking embedding calls
 
 
 class VectorStore:
@@ -26,26 +33,35 @@ class VectorStore:
         self._ensure_extension()
     
     def _initialize_embeddings(self):
-        """Initialize embedding model"""
+        """Initialize embedding model (cached globally)"""
+        global _embeddings_cache
+        
+        # Return cached model if available
+        if _embeddings_cache is not None:
+            return _embeddings_cache
+        
         # Check embedding provider setting
         provider = getattr(settings, 'EMBEDDING_PROVIDER', 'local')
         
         if provider == "openai" and settings.OPENAI_API_KEY:
             try:
-                print("Using OpenAI embeddings...")
-                return OpenAIEmbeddings(
+                print("Loading OpenAI embeddings...")
+                _embeddings_cache = OpenAIEmbeddings(
                     model=settings.OPENAI_EMBEDDING_MODEL,
                     openai_api_key=settings.OPENAI_API_KEY
                 )
+                return _embeddings_cache
             except Exception as e:
                 print(f"Failed to initialize OpenAI embeddings: {e}")
                 print("Falling back to local embeddings...")
         
         # Fallback to local embeddings (free, no API key needed)
-        print("Using local HuggingFace embeddings (sentence-transformers)...")
-        return HuggingFaceEmbeddings(
+        print("Loading local HuggingFace embeddings (this takes 10-30s on first load)...")
+        _embeddings_cache = HuggingFaceEmbeddings(
             model_name="sentence-transformers/all-MiniLM-L6-v2"
         )
+        print("✓ Embeddings loaded and cached!")
+        return _embeddings_cache
     
     def _ensure_extension(self):
         """
@@ -208,14 +224,19 @@ class VectorStore:
             print(f"Error in similarity search: {e}")
             return []
     
-    async def _get_embedding(self, text: str) -> np.ndarray:
-        """Generate embedding for text"""
-        if hasattr(self.embeddings, 'embed_query'):
-            embedding = self.embeddings.embed_query(text)
-        else:
-            embedding = self.embeddings.encode(text)
+    async def _get_embedding(self, text: str) -> np.array:
+        """Generate embedding for text (runs in thread pool to avoid blocking)"""
+        loop = asyncio.get_event_loop()
         
-        return np.array(embedding, dtype=np.float32)
+        def _embed():
+            if hasattr(self.embeddings, 'embed_query'):
+                embedding = self.embeddings.embed_query(text)
+            else:
+                embedding = self.embeddings.encode(text)
+            return np.array(embedding, dtype=np.float32)
+        
+        # Run the blocking embedding call in a thread pool
+        return await loop.run_in_executor(_thread_pool, _embed)
     
     def clear(self, fund_id: Optional[int] = None):
         """
