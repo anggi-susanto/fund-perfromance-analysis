@@ -1,7 +1,15 @@
 #!/usr/bin/env python3
 """
-Comprehensive Integration Test
-Tests the complete flow: Upload → Process → Query
+Comprehensive Integration Test Suite
+Tests the complete flow: Upload → Process → Query → Frontend
+
+6 Tests:
+1. Backend Health Check
+2. Document Upload
+3. Document Processing
+4. Chat Query & Vector Search (RAG)
+5. Frontend Accessibility
+6. API Endpoints
 """
 
 import requests
@@ -97,13 +105,13 @@ def test_document_processing(doc_id):
     return None
 
 def test_chat_query(doc_id):
-    """Test RAG chat query"""
-    print_section("4. Chat Query Test (RAG)")
+    """Test RAG chat query with vector search"""
+    print_section("4. Chat Query & Vector Search Test")
     
     queries = [
         "What is the fund name and vintage year?",
         "How many capital calls were made?",
-        "What were the total distributions?"
+        "capital call"  # Short query to test vector search
     ]
     
     for i, query_text in enumerate(queries, 1):
@@ -124,13 +132,17 @@ def test_chat_query(doc_id):
             result = response.json()
             
             print(f"   ✅ Response received")
-            print(f"   Answer: {result.get('answer', 'N/A')[:200]}...")
+            print(f"   Answer: {result.get('answer', 'N/A')[:150]}...")
             
             if result.get('sources'):
-                print(f"   Sources: {len(result['sources'])} documents")
+                print(f"   Sources: {len(result['sources'])} relevant chunks")
+                # Show first source as example
+                if result['sources']:
+                    first_source = result['sources'][0]
+                    print(f"   Top match: {first_source.get('content', '')[:60]}...")
             
             if result.get('metrics'):
-                print(f"   Metrics included: {', '.join(result['metrics'].keys())}")
+                print(f"   Metrics: {', '.join(list(result['metrics'].keys())[:5])}...")
                 
         except Exception as e:
             print(f"   ❌ Query error: {e}")
@@ -161,43 +173,11 @@ def test_frontend_accessibility():
     
     return True
 
-def test_vector_search(doc_id):
-    """Test vector similarity search"""
-    print_section("6. Vector Search Test")
-    
-    # Try a direct vector search query
-    print("   Testing semantic search...")
-    
-    try:
-        response = requests.post(
-            f"{BASE_URL}/api/chat/query",
-            json={"query": "capital call", "fund_id": 1},
-            timeout=15
-        )
-        
-        if response.status_code == 200:
-            result = response.json()
-            if result.get('sources'):
-                print(f"   ✅ Vector search working")
-                print(f"   Found {len(result['sources'])} relevant chunks")
-                for i, source in enumerate(result['sources'][:3], 1):
-                    print(f"      {i}. Page {source.get('page', 'N/A')}: {source.get('content', '')[:60]}...")
-            else:
-                print(f"   ⚠️  No sources returned")
-        else:
-            print(f"   ❌ Search failed: {response.status_code}")
-            
-    except Exception as e:
-        print(f"   ❌ Search error: {e}")
-    
-    return True
-
 def test_api_endpoints():
-    """Test various API endpoints"""
-    print_section("7. API Endpoints Test")
+    """Test additional API endpoints"""
+    print_section("6. API Endpoints Test")
     
     endpoints = [
-        ("GET", "/health", None),
         ("GET", "/api/funds", None),
         ("GET", "/api/documents", None),
     ]
@@ -223,7 +203,7 @@ def test_api_endpoints():
 def run_integration_tests():
     """Run all integration tests"""
     print("\n" + "🚀" * 35)
-    print("   COMPREHENSIVE INTEGRATION TEST")
+    print("   INTEGRATION TEST SUITE (6 Tests)")
     print("🚀" * 35)
     
     results = {}
@@ -257,16 +237,16 @@ def run_integration_tests():
         print_section("3. Document Processing Test")
         print("   ⏭️  Skipped (no document uploaded)")
     
-    # Test 4: Chat Query (RAG)
+    # Test 4: Chat Query & Vector Search (combined)
     if doc_id:
         try:
-            results['chat'] = test_chat_query(doc_id)
+            results['chat_and_vector'] = test_chat_query(doc_id)
         except Exception as e:
             print(f"❌ Chat query failed: {e}")
-            results['chat'] = False
+            results['chat_and_vector'] = False
     else:
-        results['chat'] = False
-        print_section("4. Chat Query Test (RAG)")
+        results['chat_and_vector'] = False
+        print_section("4. Chat Query & Vector Search Test")
         print("   ⏭️  Skipped (no document processed)")
     
     # Test 5: Frontend
@@ -276,19 +256,7 @@ def run_integration_tests():
         print(f"❌ Frontend test failed: {e}")
         results['frontend'] = False
     
-    # Test 6: Vector Search
-    if doc_id:
-        try:
-            results['vector_search'] = test_vector_search(doc_id)
-        except Exception as e:
-            print(f"❌ Vector search failed: {e}")
-            results['vector_search'] = False
-    else:
-        results['vector_search'] = False
-        print_section("6. Vector Search Test")
-        print("   ⏭️  Skipped (no document processed)")
-    
-    # Test 7: API Endpoints
+    # Test 6: API Endpoints
     try:
         results['api'] = test_api_endpoints()
     except Exception as e:

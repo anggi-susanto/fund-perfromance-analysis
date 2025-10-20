@@ -371,10 +371,6 @@ fund-analysis-system/
 │   │   │   ├── query_engine.py
 │   │   │   └── metrics_calculator.py
 │   │   └── main.py
-│   ├── tests/
-│   │   ├── test_document_processor.py
-│   │   ├── test_metrics.py
-│   │   └── test_api.py
 │   ├── requirements.txt
 │   ├── Dockerfile
 │   └── alembic/
@@ -409,13 +405,34 @@ fund-analysis-system/
 │   ├── next.config.js
 │   ├── tailwind.config.ts
 │   └── Dockerfile
+├── tests/                         # ✅ Test suite
+│   ├── test_integration.py       # Main integration tests
+│   ├── unit/                     # Unit tests
+│   │   └── test_table_parser.py
+│   ├── api/                      # API tests
+│   ├── manual/                   # Manual test scripts
+│   │   ├── test_llm_setup.py
+│   │   ├── test_pdf_tables.py
+│   │   └── test_concurrent_requests.py
+│   ├── deprecated/               # Old tests (reference)
+│   └── README.md
+├── scripts/                       # ✅ Utility scripts
+│   ├── migrate_documents.py      # Database migrations
+│   ├── view_document_details.py  # Debug tools
+│   └── README.md
+├── files/                         # Sample files
+│   ├── Sample_Fund_Performance_Report.pdf
+│   ├── create_sample_pdf.py
+│   └── README.md
 ├── docker-compose.yml
 ├── .env.example
 ├── README.md
 └── docs/
     ├── API.md
     ├── ARCHITECTURE.md
-    └── CALCULATIONS.md
+    ├── CALCULATIONS.md
+    ├── INTEGRATION_TEST_REPORT.md
+    └── TEST_ORGANIZATION.md
 ```
 
 ---
@@ -474,6 +491,25 @@ See [CALCULATIONS.md](docs/CALCULATIONS.md) for detailed formulas.
 
 ## Testing
 
+### Integration Tests
+
+We provide a comprehensive integration test suite that validates the entire system:
+
+```bash
+# Run integration tests
+python3 tests/test_integration.py
+```
+
+**What it tests:**
+- ✅ Backend health and API availability
+- ✅ Document upload and processing pipeline
+- ✅ Vector embeddings and similarity search
+- ✅ RAG chat queries with context retrieval
+- ✅ Frontend page accessibility
+- ✅ API endpoint responses
+
+See `tests/README.md` for detailed test documentation.
+
 ### Run Backend Tests
 ```bash
 cd backend
@@ -489,7 +525,8 @@ npm test
 ### Test Document Upload
 ```bash
 curl -X POST "http://localhost:8000/api/documents/upload" \
-  -F "file=@files/sample_fund_report.pdf"
+  -F "file=@files/Sample_Fund_Performance_Report.pdf" \
+  -F "fund_id=1"
 ```
 
 ### Test Chat Query

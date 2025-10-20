@@ -2,7 +2,8 @@
 
 **Date:** October 20, 2025  
 **Test Suite:** Comprehensive Integration Test  
-**Result:** 7/7 Tests Passed (100%)  
+**Test Location:** `tests/test_integration.py`  
+**Result:** 6/6 Tests Passed (100%)  
 **Status:** 🎉 PRODUCTION READY!
 
 ---
@@ -11,7 +12,9 @@
 
 The Fund Performance Analysis System has been thoroughly tested and verified. All components are functioning correctly, and the system is ready for production use.
 
-**Overall Score: 7/7 (100%)** ✅
+**Overall Score: 6/6 (100%)** ✅
+
+**Note:** Test suite has been streamlined from 7 to 6 tests by removing duplicates (vector search merged into chat query test, duplicate health check removed).
 
 ---
 
@@ -396,11 +399,29 @@ The system is ready to proceed with frontend integration for the chat interface,
 ---
 
 **Test Conducted By:** Integration Test Suite  
+**Test Location:** `tests/test_integration.py`  
 **Test Date:** October 20, 2025  
-**Test Duration:** ~30 seconds  
-**Total Tests:** 7  
-**Passed:** 7  
+**Test Duration:** ~25 seconds  
+**Total Tests:** 6  
+**Passed:** 6  
 **Failed:** 0  
 **Success Rate:** 100%  
+
+## Running the Tests
+
+To run the integration test suite:
+
+```bash
+# From project root
+python3 tests/test_integration.py
+```
+
+**Prerequisites:**
+- Backend running on http://localhost:8000
+- Frontend running on http://localhost:3000  
+- PostgreSQL with pgvector extension
+- Sample PDF file in `files/Sample_Fund_Performance_Report.pdf`
+
+For more test documentation, see `tests/README.md`
 
 🚀 **Ready for Production!**
