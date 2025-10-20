@@ -1,7 +1,7 @@
 """
 Document API endpoints
 """
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, BackgroundTasks, Form
 from sqlalchemy.orm import Session
 from typing import List
 import os
@@ -24,10 +24,12 @@ router = APIRouter()
 async def upload_document(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    fund_id: int = None,
+    fund_id: int = Form(1),  # Use Form() for multipart form data
     db: Session = Depends(get_db)
 ):
     """Upload and process a PDF document"""
+    
+    print(f"[Upload] Received fund_id: {fund_id}, type: {type(fund_id)}")
     
     # Validate file type
     if not file.filename.endswith('.pdf'):
@@ -71,7 +73,7 @@ async def upload_document(
         process_document_task,
         document.id,
         file_path,
-        fund_id or 1  # Default fund_id if not provided
+        fund_id  # Use the fund_id from parameter
     )
     
     return DocumentUploadResponse(

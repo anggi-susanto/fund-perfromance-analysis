@@ -59,9 +59,17 @@ class VectorStore:
             # Enable pgvector extension
             self.db.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
             
-            # Create embeddings table
-            # Dimension: 1536 for OpenAI, 384 for sentence-transformers
-            dimension = 1536 if settings.OPENAI_API_KEY else 384
+            # Determine dimension based on embedding model
+            # Check if using local embeddings (384) or OpenAI (1536)
+            provider = getattr(settings, 'EMBEDDING_PROVIDER', 'local')
+            if provider == "openai" and settings.OPENAI_API_KEY:
+                dimension = 1536
+            else:
+                dimension = 384  # HuggingFace sentence-transformers/all-MiniLM-L6-v2
+            
+            # Drop and recreate table with correct dimension
+            # (In production, you'd use migrations instead)
+            self.db.execute(text("DROP TABLE IF EXISTS document_embeddings CASCADE"))
             
             create_table_sql = f"""
             CREATE TABLE IF NOT EXISTS document_embeddings (
@@ -81,6 +89,7 @@ class VectorStore:
             
             self.db.execute(text(create_table_sql))
             self.db.commit()
+            print(f"✓ Vector table created with dimension: {dimension}")
         except Exception as e:
             print(f"Error ensuring pgvector extension: {e}")
             self.db.rollback()
@@ -99,18 +108,23 @@ class VectorStore:
             embedding = await self._get_embedding(content)
             embedding_list = embedding.tolist()
             
-            # Insert into database
+            # Convert to string format for pgvector
+            import json
+            embedding_str = str(embedding_list)
+            metadata_json = json.dumps(metadata)
+            
+            # Insert into database using proper SQLAlchemy text syntax
             insert_sql = text("""
                 INSERT INTO document_embeddings (document_id, fund_id, content, embedding, metadata)
-                VALUES (:document_id, :fund_id, :content, :embedding::vector, :metadata::jsonb)
+                VALUES (:document_id, :fund_id, :content, CAST(:embedding AS vector), CAST(:metadata AS jsonb))
             """)
             
             self.db.execute(insert_sql, {
                 "document_id": metadata.get("document_id"),
                 "fund_id": metadata.get("fund_id"),
                 "content": content,
-                "embedding": str(embedding_list),
-                "metadata": str(metadata)
+                "embedding": embedding_str,
+                "metadata": metadata_json
             })
             self.db.commit()
         except Exception as e:
@@ -145,6 +159,7 @@ class VectorStore:
             # Generate query embedding
             query_embedding = await self._get_embedding(query)
             embedding_list = query_embedding.tolist()
+            embedding_str = str(embedding_list)
             
             # Build query with optional filters
             where_clause = ""
@@ -164,15 +179,15 @@ class VectorStore:
                     fund_id,
                     content,
                     metadata,
-                    1 - (embedding <=> :query_embedding::vector) as similarity_score
+                    1 - (embedding <=> CAST(:query_embedding AS vector)) as similarity_score
                 FROM document_embeddings
                 {where_clause}
-                ORDER BY embedding <=> :query_embedding::vector
+                ORDER BY embedding <=> CAST(:query_embedding AS vector)
                 LIMIT :k
             """)
             
             result = self.db.execute(search_sql, {
-                "query_embedding": str(embedding_list),
+                "query_embedding": embedding_str,
                 "k": k
             })
             

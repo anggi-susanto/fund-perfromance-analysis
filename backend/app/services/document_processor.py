@@ -57,17 +57,21 @@ class DocumentProcessor:
                         # Extract tables from page
                         tables = page.extract_tables()
                         
+                        print(f"  Found {len(tables)} tables on page {page_num}")
+                        
                         if tables:
                             stats["tables_found"] += len(tables)
                             
                             # Process each table
                             for table_idx, table in enumerate(tables):
                                 if not table or len(table) < 2:
+                                    print(f"  Skipping empty table {table_idx}")
                                     continue
                                 
                                 try:
                                     # Parse and classify table
                                     parsed_table = self.table_parser.parse_table(table)
+                                    print(f"  Table {table_idx}: Type={parsed_table['type']}, Rows={len(parsed_table.get('rows', []))}")
                                     
                                     # Store table data in database
                                     stored_count = await self._store_table_data(
@@ -75,6 +79,8 @@ class DocumentProcessor:
                                         fund_id, 
                                         document_id
                                     )
+                                    
+                                    print(f"  Stored {stored_count} records from table {table_idx}")
                                     
                                     # Update statistics
                                     if parsed_table["type"] == "capital_call":
