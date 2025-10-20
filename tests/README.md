@@ -156,6 +156,14 @@ def test_get_funds():
 ### Adding Manual Tests
 Place manual/debug scripts in `tests/manual/` directory with clear documentation.
 
+### Guidelines
+For detailed guidelines on creating new tests, see **[CONTRIBUTING.md](CONTRIBUTING.md)** which includes:
+- Where to place different types of tests
+- Naming conventions
+- Code templates
+- Best practices
+- Quality standards
+
 ## Continuous Integration
 
 When setting up CI/CD, use:
