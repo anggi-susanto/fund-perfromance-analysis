@@ -23,7 +23,8 @@ try:
     
     if response.status_code == 200:
         data = response.json()
-        print(f"\nResponse: {data.get('response', 'N/A')[:200]}...")
+        answer = data.get('answer', 'N/A')
+        print(f"\nAnswer: {answer[:200] if len(answer) > 200 else answer}...")
         print(f"\nMetrics: {data.get('metrics', {})}")
     else:
         print(f"Error: {response.text}")

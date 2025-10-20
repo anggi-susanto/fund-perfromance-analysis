@@ -1,11 +1,5 @@
 """
-Vector store service using pgvector (PostgreSQL extension)
-
-TODO: Implement vector storage using pgvector
-- Create embeddings table in PostgreSQL
-- Store document chunks with vector embeddings
-- Implement similarity search using pgvector operators
-- Handle metadata filtering
+Improved Vector Store with proper async/sync separation and resource management
 """
 from typing import List, Dict, Any, Optional
 import numpy as np
@@ -14,139 +8,197 @@ from sqlalchemy import text
 from langchain_openai import OpenAIEmbeddings
 from langchain_huggingface import HuggingFaceEmbeddings
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
 from app.core.config import settings
-from app.db.session import SessionLocal
 
-# Global cache for embedding model (loaded once, reused across requests)
+# Global embedding model cache
 _embeddings_cache = None
-_embeddings_lock = None
-_thread_pool = ThreadPoolExecutor(max_workers=4)  # Thread pool for blocking embedding calls
+
+
+@lru_cache(maxsize=1)
+def get_embeddings_model():
+    """
+    Get or create the embeddings model (cached singleton)
+    Thread-safe singleton pattern
+    """
+    global _embeddings_cache
+    
+    if _embeddings_cache is not None:
+        return _embeddings_cache
+    
+    provider = getattr(settings, 'EMBEDDING_PROVIDER', 'local')
+    
+    if provider == "openai" and settings.OPENAI_API_KEY:
+        try:
+            print("Loading OpenAI embeddings...")
+            _embeddings_cache = OpenAIEmbeddings(
+                model=settings.OPENAI_EMBEDDING_MODEL,
+                openai_api_key=settings.OPENAI_API_KEY
+            )
+            return _embeddings_cache
+        except Exception as e:
+            print(f"Failed to initialize OpenAI embeddings: {e}")
+            print("Falling back to local embeddings...")
+    
+    # Fallback to local embeddings
+    print("Loading local HuggingFace embeddings (this takes 10-30s on first load)...")
+    _embeddings_cache = HuggingFaceEmbeddings(
+        model_name="sentence-transformers/all-MiniLM-L6-v2"
+    )
+    print("✓ Embeddings loaded and cached!")
+    return _embeddings_cache
 
 
 class VectorStore:
-    """pgvector-based vector store for document embeddings"""
+    """
+    Improved pgvector-based vector store with proper resource management
     
-    def __init__(self, db: Session = None):
-        self.db = db or SessionLocal()
-        self.embeddings = self._initialize_embeddings()
+    Key improvements:
+    1. Accepts db session from caller (no session creation)
+    2. Embeddings model is shared singleton
+    3. Async operations properly isolated
+    4. No resource leaks
+    """
+    
+    def __init__(self, db: Session):
+        """
+        Initialize vector store with existing database session
+        
+        Args:
+            db: SQLAlchemy database session (managed by caller)
+        """
+        if db is None:
+            raise ValueError("Database session is required")
+        
+        self.db = db
+        self.embeddings = get_embeddings_model()
         self._ensure_extension()
     
-    def _initialize_embeddings(self):
-        """Initialize embedding model (cached globally)"""
-        global _embeddings_cache
-        
-        # Return cached model if available
-        if _embeddings_cache is not None:
-            return _embeddings_cache
-        
-        # Check embedding provider setting
-        provider = getattr(settings, 'EMBEDDING_PROVIDER', 'local')
-        
-        if provider == "openai" and settings.OPENAI_API_KEY:
-            try:
-                print("Loading OpenAI embeddings...")
-                _embeddings_cache = OpenAIEmbeddings(
-                    model=settings.OPENAI_EMBEDDING_MODEL,
-                    openai_api_key=settings.OPENAI_API_KEY
-                )
-                return _embeddings_cache
-            except Exception as e:
-                print(f"Failed to initialize OpenAI embeddings: {e}")
-                print("Falling back to local embeddings...")
-        
-        # Fallback to local embeddings (free, no API key needed)
-        print("Loading local HuggingFace embeddings (this takes 10-30s on first load)...")
-        _embeddings_cache = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2"
-        )
-        print("✓ Embeddings loaded and cached!")
-        return _embeddings_cache
-    
     def _ensure_extension(self):
-        """
-        Ensure pgvector extension is enabled
-        
-        TODO: Implement this method
-        - Execute: CREATE EXTENSION IF NOT EXISTS vector;
-        - Create embeddings table if not exists
-        """
+        """Ensure pgvector extension is enabled"""
         try:
-            # Enable pgvector extension
             self.db.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
             
-            # Determine dimension based on embedding model
-            # Check if using local embeddings (384) or OpenAI (1536)
+            # Determine dimension
             provider = getattr(settings, 'EMBEDDING_PROVIDER', 'local')
-            if provider == "openai" and settings.OPENAI_API_KEY:
-                dimension = 1536
-            else:
-                dimension = 384  # HuggingFace sentence-transformers/all-MiniLM-L6-v2
+            dimension = 1536 if provider == "openai" and settings.OPENAI_API_KEY else 384
             
-            # Drop and recreate table with correct dimension
-            # (In production, you'd use migrations instead)
-            self.db.execute(text("DROP TABLE IF EXISTS document_embeddings CASCADE"))
+            # Create table if not exists
+            create_table_sql = text(f"""
+                CREATE TABLE IF NOT EXISTS document_embeddings (
+                    id SERIAL PRIMARY KEY,
+                    document_id INTEGER REFERENCES documents(id) ON DELETE CASCADE,
+                    fund_id INTEGER,
+                    chunk_index INTEGER,
+                    content TEXT NOT NULL,
+                    embedding vector({dimension}),
+                    metadata JSONB,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            self.db.execute(create_table_sql)
             
-            create_table_sql = f"""
-            CREATE TABLE IF NOT EXISTS document_embeddings (
-                id SERIAL PRIMARY KEY,
-                document_id INTEGER,
-                fund_id INTEGER,
-                content TEXT NOT NULL,
-                embedding vector({dimension}),
-                metadata JSONB,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
+            # Create index if not exists
+            create_index_sql = text("""
+                CREATE INDEX IF NOT EXISTS document_embeddings_vector_idx 
+                ON document_embeddings 
+                USING ivfflat (embedding vector_cosine_ops)
+                WITH (lists = 100)
+            """)
+            self.db.execute(create_index_sql)
             
-            CREATE INDEX IF NOT EXISTS document_embeddings_embedding_idx 
-            ON document_embeddings USING ivfflat (embedding vector_cosine_ops)
-            WITH (lists = 100);
-            """
-            
-            self.db.execute(text(create_table_sql))
             self.db.commit()
             print(f"✓ Vector table created with dimension: {dimension}")
+            
         except Exception as e:
-            print(f"Error ensuring pgvector extension: {e}")
+            print(f"Error ensuring extension: {e}")
             self.db.rollback()
     
-    async def add_document(self, content: str, metadata: Dict[str, Any]):
+    async def add_documents(
+        self, 
+        texts: List[str], 
+        metadata: Optional[List[Dict[str, Any]]] = None
+    ) -> List[int]:
         """
-        Add a document to the vector store
+        Add documents with embeddings to the vector store
         
-        TODO: Implement this method
-        - Generate embedding for content
-        - Insert into document_embeddings table
-        - Store metadata as JSONB
+        Args:
+            texts: List of text chunks
+            metadata: Optional metadata for each chunk
+            
+        Returns:
+            List of inserted document IDs
         """
+        if not texts:
+            return []
+        
         try:
-            # Generate embedding
-            embedding = await self._get_embedding(content)
-            embedding_list = embedding.tolist()
+            # Generate embeddings in thread pool (blocking operation)
+            loop = asyncio.get_event_loop()
+            embeddings = await loop.run_in_executor(
+                None,  # Use default executor
+                self._embed_texts_sync,
+                texts
+            )
             
-            # Convert to string format for pgvector
-            import json
-            embedding_str = str(embedding_list)
-            metadata_json = json.dumps(metadata)
+            # Insert into database (in thread pool to avoid blocking)
+            ids = await loop.run_in_executor(
+                None,
+                self._insert_embeddings_sync,
+                texts,
+                embeddings,
+                metadata or [{}] * len(texts)
+            )
             
-            # Insert into database using proper SQLAlchemy text syntax
-            insert_sql = text("""
-                INSERT INTO document_embeddings (document_id, fund_id, content, embedding, metadata)
-                VALUES (:document_id, :fund_id, :content, CAST(:embedding AS vector), CAST(:metadata AS jsonb))
-            """)
+            return ids
             
-            self.db.execute(insert_sql, {
-                "document_id": metadata.get("document_id"),
-                "fund_id": metadata.get("fund_id"),
-                "content": content,
-                "embedding": embedding_str,
-                "metadata": metadata_json
-            })
-            self.db.commit()
         except Exception as e:
-            print(f"Error adding document: {e}")
+            print(f"Error adding documents: {e}")
             self.db.rollback()
             raise
+    
+    def _embed_texts_sync(self, texts: List[str]) -> List[List[float]]:
+        """Synchronous embedding generation (runs in thread pool)"""
+        if hasattr(self.embeddings, 'embed_documents'):
+            return self.embeddings.embed_documents(texts)
+        else:
+            return [self.embeddings.encode(text).tolist() for text in texts]
+    
+    def _insert_embeddings_sync(
+        self,
+        texts: List[str],
+        embeddings: List[List[float]],
+        metadata_list: List[Dict[str, Any]]
+    ) -> List[int]:
+        """Synchronous database insert (runs in thread pool)"""
+        ids = []
+        
+        for text, embedding, metadata in zip(texts, embeddings, metadata_list):
+            embedding_str = str(embedding)
+            
+            insert_sql = text("""
+                INSERT INTO document_embeddings 
+                (document_id, fund_id, chunk_index, content, embedding, metadata)
+                VALUES (:document_id, :fund_id, :chunk_index, :content, 
+                        CAST(:embedding AS vector), :metadata)
+                RETURNING id
+            """)
+            
+            result = self.db.execute(insert_sql, {
+                "document_id": metadata.get("document_id"),
+                "fund_id": metadata.get("fund_id"),
+                "chunk_index": metadata.get("chunk_index", 0),
+                "content": text,
+                "embedding": embedding_str,
+                "metadata": str(metadata)
+            })
+            
+            row = result.fetchone()
+            if row:
+                ids.append(row[0])
+        
+        self.db.commit()
+        return ids
     
     async def similarity_search(
         self, 
@@ -155,96 +207,100 @@ class VectorStore:
         filter_metadata: Optional[Dict[str, Any]] = None
     ) -> List[Dict[str, Any]]:
         """
-        Search for similar documents using cosine similarity
-        
-        TODO: Implement this method
-        - Generate query embedding
-        - Use pgvector's <=> operator for cosine distance
-        - Apply metadata filters if provided
-        - Return top k results
+        Search for similar documents
         
         Args:
             query: Search query
-            k: Number of results to return
-            filter_metadata: Optional metadata filters (e.g., {"fund_id": 1})
+            k: Number of results
+            filter_metadata: Optional filters
             
         Returns:
             List of similar documents with scores
         """
         try:
-            # Generate query embedding
-            query_embedding = await self._get_embedding(query)
-            embedding_list = query_embedding.tolist()
-            embedding_str = str(embedding_list)
+            # Generate query embedding in thread pool
+            loop = asyncio.get_event_loop()
+            query_embedding = await loop.run_in_executor(
+                None,
+                self._embed_query_sync,
+                query
+            )
             
-            # Build query with optional filters
-            where_clause = ""
-            if filter_metadata:
-                conditions = []
-                for key, value in filter_metadata.items():
-                    if key in ["document_id", "fund_id"]:
-                        conditions.append(f"{key} = {value}")
-                if conditions:
-                    where_clause = "WHERE " + " AND ".join(conditions)
-            
-            # Search using cosine distance (<=> operator)
-            search_sql = text(f"""
-                SELECT 
-                    id,
-                    document_id,
-                    fund_id,
-                    content,
-                    metadata,
-                    1 - (embedding <=> CAST(:query_embedding AS vector)) as similarity_score
-                FROM document_embeddings
-                {where_clause}
-                ORDER BY embedding <=> CAST(:query_embedding AS vector)
-                LIMIT :k
-            """)
-            
-            result = self.db.execute(search_sql, {
-                "query_embedding": embedding_str,
-                "k": k
-            })
-            
-            # Format results
-            results = []
-            for row in result:
-                results.append({
-                    "id": row[0],
-                    "document_id": row[1],
-                    "fund_id": row[2],
-                    "content": row[3],
-                    "metadata": row[4],
-                    "score": float(row[5])
-                })
+            # Search database in thread pool
+            results = await loop.run_in_executor(
+                None,
+                self._search_sync,
+                query_embedding,
+                k,
+                filter_metadata
+            )
             
             return results
+            
         except Exception as e:
             print(f"Error in similarity search: {e}")
             return []
     
-    async def _get_embedding(self, text: str) -> np.array:
-        """Generate embedding for text (runs in thread pool to avoid blocking)"""
-        loop = asyncio.get_event_loop()
+    def _embed_query_sync(self, query: str) -> List[float]:
+        """Synchronous query embedding (runs in thread pool)"""
+        if hasattr(self.embeddings, 'embed_query'):
+            return self.embeddings.embed_query(query)
+        else:
+            return self.embeddings.encode(query).tolist()
+    
+    def _search_sync(
+        self,
+        query_embedding: List[float],
+        k: int,
+        filter_metadata: Optional[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Synchronous database search (runs in thread pool)"""
+        embedding_str = str(query_embedding)
         
-        def _embed():
-            if hasattr(self.embeddings, 'embed_query'):
-                embedding = self.embeddings.embed_query(text)
-            else:
-                embedding = self.embeddings.encode(text)
-            return np.array(embedding, dtype=np.float32)
+        # Build query with filters
+        where_clause = ""
+        if filter_metadata:
+            conditions = []
+            for key, value in filter_metadata.items():
+                if key in ["document_id", "fund_id"]:
+                    conditions.append(f"{key} = {value}")
+            if conditions:
+                where_clause = "WHERE " + " AND ".join(conditions)
         
-        # Run the blocking embedding call in a thread pool
-        return await loop.run_in_executor(_thread_pool, _embed)
+        search_sql = text(f"""
+            SELECT 
+                id,
+                document_id,
+                fund_id,
+                content,
+                metadata,
+                1 - (embedding <=> CAST(:embedding AS vector)) as similarity
+            FROM document_embeddings
+            {where_clause}
+            ORDER BY embedding <=> CAST(:embedding AS vector)
+            LIMIT :k
+        """)
+        
+        result = self.db.execute(search_sql, {
+            "embedding": embedding_str,
+            "k": k
+        })
+        
+        documents = []
+        for row in result:
+            documents.append({
+                "id": row[0],
+                "document_id": row[1],
+                "fund_id": row[2],
+                "content": row[3],
+                "metadata": row[4],
+                "score": float(row[5])
+            })
+        
+        return documents
     
     def clear(self, fund_id: Optional[int] = None):
-        """
-        Clear the vector store
-        
-        TODO: Implement this method
-        - Delete all embeddings (or filter by fund_id)
-        """
+        """Clear vector store"""
         try:
             if fund_id:
                 delete_sql = text("DELETE FROM document_embeddings WHERE fund_id = :fund_id")

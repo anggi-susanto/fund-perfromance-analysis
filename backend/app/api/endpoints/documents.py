@@ -96,9 +96,9 @@ async def process_document_task(document_id: int, file_path: str, fund_id: int):
         document.parsing_status = "processing"
         db.commit()
         
-        # Process document
+        # Process document (now passing db session)
         processor = DocumentProcessor()
-        result = await processor.process_document(file_path, document_id, fund_id)
+        result = await processor.process_document(file_path, document_id, fund_id, db)
         
         # Update status
         document.parsing_status = result["status"]

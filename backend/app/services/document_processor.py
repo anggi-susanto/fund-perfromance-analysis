@@ -9,7 +9,6 @@ from app.core.config import settings
 from app.services.table_parser import TableParser
 from app.services.vector_store import VectorStore
 from app.models.transaction import CapitalCall, Distribution, Adjustment
-from app.db.session import SessionLocal
 
 
 class DocumentProcessor:
@@ -17,9 +16,14 @@ class DocumentProcessor:
     
     def __init__(self):
         self.table_parser = TableParser()
-        self.vector_store = VectorStore()
     
-    async def process_document(self, file_path: str, document_id: int, fund_id: int) -> Dict[str, Any]:
+    async def process_document(
+        self, 
+        file_path: str, 
+        document_id: int, 
+        fund_id: int,
+        db: Session
+    ) -> Dict[str, Any]:
         """
         Process a PDF document
         
@@ -77,7 +81,8 @@ class DocumentProcessor:
                                     stored_count = await self._store_table_data(
                                         parsed_table, 
                                         fund_id, 
-                                        document_id
+                                        document_id,
+                                        db
                                     )
                                     
                                     print(f"  Stored {stored_count} records from table {table_idx}")
@@ -111,20 +116,26 @@ class DocumentProcessor:
                 # Chunk and store text for vector search
                 if all_text_content:
                     try:
+                        # Create VectorStore with the provided session
+                        vector_store = VectorStore(db)
+                        
                         chunks = self._chunk_text(all_text_content)
                         stats["text_chunks"] = len(chunks)
                         
-                        # Store chunks in vector database
-                        for chunk in chunks:
-                            await self.vector_store.add_document(
-                                content=chunk["text"],
-                                metadata={
-                                    "document_id": document_id,
-                                    "fund_id": fund_id,
-                                    "page": chunk["page"],
-                                    "chunk_index": chunk["chunk_index"]
-                                }
-                            )
+                        # Prepare texts and metadata for batch insert
+                        texts = [chunk["text"] for chunk in chunks]
+                        metadata_list = [
+                            {
+                                "document_id": document_id,
+                                "fund_id": fund_id,
+                                "page": chunk["page"],
+                                "chunk_index": chunk["chunk_index"]
+                            }
+                            for chunk in chunks
+                        ]
+                        
+                        # Store all chunks in vector database
+                        await vector_store.add_documents(texts, metadata_list)
                     
                     except Exception as e:
                         error_msg = f"Error storing text chunks: {str(e)}"
@@ -156,7 +167,8 @@ class DocumentProcessor:
         self, 
         parsed_table: Dict[str, Any], 
         fund_id: int, 
-        document_id: int
+        document_id: int,
+        db: Session
     ) -> int:
         """
         Store parsed table data in the database
@@ -165,11 +177,11 @@ class DocumentProcessor:
             parsed_table: Parsed table data
             fund_id: Fund ID
             document_id: Document ID
+            db: Database session
             
         Returns:
             Number of rows stored
         """
-        db = SessionLocal()
         stored_count = 0
         
         try:
@@ -227,9 +239,6 @@ class DocumentProcessor:
         except Exception as e:
             db.rollback()
             print(f"Error storing table data: {e}")
-        
-        finally:
-            db.close()
         
         return stored_count
     

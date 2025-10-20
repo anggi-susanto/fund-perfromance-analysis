@@ -1,10 +1,10 @@
 """
-Query engine service for RAG-based question answering
+Improved Query Engine with proper async handling and resource management
 """
 from typing import Dict, Any, List, Optional
 import time
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
 from langchain_openai import ChatOpenAI
 from langchain_community.llms import Ollama
 from langchain_core.prompts import ChatPromptTemplate
@@ -13,86 +13,78 @@ from app.services.vector_store import VectorStore
 from app.services.metrics_calculator import MetricsCalculator
 from sqlalchemy.orm import Session
 
-# Thread pool for blocking LLM calls
-_llm_thread_pool = ThreadPoolExecutor(max_workers=4)
+
+@lru_cache(maxsize=1)
+def get_llm():
+    """
+    Get or create LLM instance (cached singleton)
+    This ensures LLM is initialized once and reused
+    """
+    provider = getattr(settings, 'LLM_PROVIDER', 'groq')
+    
+    if provider == "groq":
+        groq_key = getattr(settings, 'GROQ_API_KEY', '')
+        if groq_key:
+            try:
+                print(f"Initializing Groq LLM ({settings.GROQ_MODEL})...")
+                from langchain_groq import ChatGroq
+                return ChatGroq(
+                    api_key=groq_key,
+                    model=settings.GROQ_MODEL,
+                    temperature=0
+                )
+            except Exception as e:
+                print(f"Failed to initialize Groq: {e}")
+    
+    if provider == "openai" and settings.OPENAI_API_KEY:
+        try:
+            print("Initializing OpenAI LLM...")
+            return ChatOpenAI(
+                model=settings.OPENAI_MODEL,
+                temperature=0,
+                openai_api_key=settings.OPENAI_API_KEY
+            )
+        except Exception as e:
+            print(f"Failed to initialize OpenAI: {e}")
+    
+    if provider == "ollama":
+        try:
+            print(f"Initializing Ollama LLM ({settings.OLLAMA_MODEL})...")
+            return Ollama(
+                base_url=settings.OLLAMA_BASE_URL,
+                model=settings.OLLAMA_MODEL
+            )
+        except Exception as e:
+            print(f"Failed to connect to Ollama: {e}")
+    
+    raise ValueError("No LLM configured! Please set GROQ_API_KEY, OPENAI_API_KEY, or configure Ollama")
 
 
 class QueryEngine:
-    """RAG-based query engine for fund analysis"""
+    """
+    Improved RAG-based query engine
+    
+    Key improvements:
+    1. Database session managed by caller (no leaks)
+    2. LLM and embeddings are singletons (no repeated initialization)
+    3. Proper async/sync separation with default executor
+    4. No custom thread pools (uses asyncio default)
+    """
     
     def __init__(self, db: Session):
+        """
+        Initialize query engine with database session
+        
+        Args:
+            db: SQLAlchemy session (managed by caller via FastAPI dependency)
+        """
+        if db is None:
+            raise ValueError("Database session is required")
+        
         self.db = db
-        self.vector_store = VectorStore()
+        self.vector_store = VectorStore(db)  # Pass session to VectorStore
         self.metrics_calculator = MetricsCalculator(db)
-        self.llm = self._initialize_llm()
-    
-    def _initialize_llm(self):
-        """Initialize LLM based on configured provider"""
-        provider = getattr(settings, 'LLM_PROVIDER', 'groq')
-        
-        # Try Groq first (free, fast, cloud-based)
-        if provider == "groq":
-            groq_key = getattr(settings, 'GROQ_API_KEY', '')
-            if groq_key:
-                try:
-                    print(f"Using Groq LLM ({settings.GROQ_MODEL})...")
-                    from langchain_groq import ChatGroq
-                    return ChatGroq(
-                        api_key=groq_key,
-                        model=settings.GROQ_MODEL,
-                        temperature=0
-                    )
-                except ImportError:
-                    print("langchain-groq not installed. Installing...")
-                    import subprocess
-                    subprocess.run(["pip", "install", "langchain-groq"], check=False)
-                    try:
-                        from langchain_groq import ChatGroq
-                        return ChatGroq(
-                            api_key=groq_key,
-                            model=settings.GROQ_MODEL,
-                            temperature=0
-                        )
-                    except Exception as e:
-                        print(f"Failed to initialize Groq: {e}")
-                except Exception as e:
-                    print(f"Failed to initialize Groq: {e}")
-        
-        # Try OpenAI if available
-        if provider == "openai" and settings.OPENAI_API_KEY:
-            try:
-                print("Using OpenAI LLM...")
-                return ChatOpenAI(
-                    model=settings.OPENAI_MODEL,
-                    temperature=0,
-                    openai_api_key=settings.OPENAI_API_KEY
-                )
-            except Exception as e:
-                print(f"Failed to initialize OpenAI: {e}")
-        
-        # Try Ollama (local)
-        if provider == "ollama":
-            try:
-                print(f"Using Ollama LLM ({settings.OLLAMA_MODEL})...")
-                return Ollama(
-                    base_url=settings.OLLAMA_BASE_URL,
-                    model=settings.OLLAMA_MODEL
-                )
-            except Exception as e:
-                print(f"Failed to connect to Ollama: {e}")
-        
-        # No LLM available
-        print("\n⚠️  WARNING: No LLM configured!")
-        print("Please configure one of the following:")
-        print("  1. Groq (Recommended - Free & Fast):")
-        print("     - Sign up: https://console.groq.com")
-        print("     - Add GROQ_API_KEY to .env")
-        print("  2. OpenAI (Paid):")
-        print("     - Add OPENAI_API_KEY to .env")
-        print("  3. Ollama (Local - Requires good hardware):")
-        print("     - brew install ollama")
-        print("     - ollama pull llama3.2")
-        return None
+        self.llm = get_llm()  # Get cached LLM singleton
     
     async def process_query(
         self, 
@@ -101,109 +93,108 @@ class QueryEngine:
         conversation_history: List[Dict[str, str]] = None
     ) -> Dict[str, Any]:
         """
-        Process a user query using RAG
+        Process user query using RAG
         
-        Args:
-            query: User question
-            fund_id: Optional fund ID for context
-            conversation_history: Previous conversation messages
-            
-        Returns:
-            Response with answer, sources, and metrics
+        All blocking operations run in asyncio's default thread pool
+        to avoid blocking the event loop
         """
         start_time = time.time()
         
-        # Step 1: Classify query intent
-        intent = await self._classify_intent(query)
-        
-        # Step 2: Retrieve relevant context from vector store
-        filter_metadata = {"fund_id": fund_id} if fund_id else None
-        relevant_docs = await self.vector_store.similarity_search(
-            query=query,
-            k=settings.TOP_K_RESULTS,
-            filter_metadata=filter_metadata
-        )
-        
-        # Step 3: Calculate metrics if needed
-        metrics = None
-        if intent == "calculation" and fund_id:
-            metrics = self.metrics_calculator.calculate_all_metrics(fund_id)
-        
-        # Step 4: Generate response using LLM
-        answer = await self._generate_response(
-            query=query,
-            context=relevant_docs,
-            metrics=metrics,
-            conversation_history=conversation_history or []
-        )
-        
-        processing_time = time.time() - start_time
-        
-        return {
-            "answer": answer,
-            "sources": [
-                {
-                    "content": doc["content"],
-                    "metadata": {
-                        k: v for k, v in doc.items() 
-                        if k not in ["content", "score"]
-                    },
-                    "score": doc.get("score")
-                }
-                for doc in relevant_docs
-            ],
-            "metrics": metrics,
-            "processing_time": round(processing_time, 2)
-        }
+        try:
+            # Step 1: Classify query intent (fast, can be sync)
+            intent = self._classify_intent_sync(query)
+            
+            # Step 2: Retrieve relevant context (async - uses thread pool internally)
+            filter_metadata = {"fund_id": fund_id} if fund_id else None
+            relevant_docs = await self.vector_store.similarity_search(
+                query=query,
+                k=settings.TOP_K_RESULTS,
+                filter_metadata=filter_metadata
+            )
+            
+            # Step 3: Get metrics (run in thread pool - blocking DB operation)
+            metrics = None
+            if fund_id and intent in ["calculation", "retrieval"]:
+                loop = asyncio.get_event_loop()
+                metrics = await loop.run_in_executor(
+                    None,  # Use default executor
+                    self.metrics_calculator.calculate_all_metrics,
+                    fund_id
+                )
+            
+            # Step 4: Generate response (run in thread pool - blocking LLM call)
+            loop = asyncio.get_event_loop()
+            answer = await loop.run_in_executor(
+                None,
+                self._generate_response_sync,
+                query,
+                relevant_docs,
+                metrics,
+                conversation_history or []
+            )
+            
+            elapsed = time.time() - start_time
+            
+            return {
+                "answer": answer,
+                "sources": [
+                    {
+                        "content": doc["content"][:200],
+                        "document_id": doc.get("document_id"),
+                        "score": doc.get("score")
+                    }
+                    for doc in relevant_docs[:3]
+                ],
+                "metrics": metrics,
+                "processing_time": round(elapsed, 2)
+            }
+            
+        except Exception as e:
+            print(f"Error processing query: {e}")
+            import traceback
+            traceback.print_exc()
+            return {
+                "answer": f"I apologize, but I encountered an error: {str(e)}",
+                "sources": [],
+                "metrics": None,
+                "processing_time": round(time.time() - start_time, 2)
+            }
     
-    async def _classify_intent(self, query: str) -> str:
-        """
-        Classify query intent
-        
-        Returns:
-            'calculation', 'definition', 'retrieval', or 'general'
-        """
+    def _classify_intent_sync(self, query: str) -> str:
+        """Classify query intent (synchronous, fast operation)"""
         query_lower = query.lower()
         
         # Calculation keywords
-        calc_keywords = [
-            "calculate", "what is the", "current", "dpi", "irr", "tvpi", 
-            "rvpi", "pic", "paid-in capital", "return", "performance"
-        ]
-        if any(keyword in query_lower for keyword in calc_keywords):
+        if any(word in query_lower for word in ["calculate", "compute", "what is the", "dpi", "irr", "tvpi", "moic", "pic"]):
             return "calculation"
         
-        # Definition keywords
-        def_keywords = [
-            "what does", "mean", "define", "explain", "definition", 
-            "what is a", "what are"
-        ]
-        if any(keyword in query_lower for keyword in def_keywords):
-            return "definition"
-        
         # Retrieval keywords
-        ret_keywords = [
-            "show me", "list", "all", "find", "search", "when", 
-            "how many", "which"
-        ]
-        if any(keyword in query_lower for keyword in ret_keywords):
+        if any(word in query_lower for word in ["show", "list", "get", "find", "retrieve", "capital call", "distribution"]):
             return "retrieval"
+        
+        # Definition keywords
+        if any(word in query_lower for word in ["what is", "define", "explain", "meaning"]):
+            return "definition"
         
         return "general"
     
-    async def _generate_response(
+    def _generate_response_sync(
         self,
         query: str,
         context: List[Dict[str, Any]],
         metrics: Optional[Dict[str, Any]],
         conversation_history: List[Dict[str, str]]
     ) -> str:
-        """Generate response using LLM"""
+        """
+        Generate LLM response (synchronous, runs in thread pool)
         
+        This method is called from thread pool executor, so it's safe
+        to do blocking operations here
+        """
         # Build context string
         context_str = "\n\n".join([
             f"[Source {i+1}]\n{doc['content']}"
-            for i, doc in enumerate(context[:3])  # Use top 3 sources
+            for i, doc in enumerate(context[:3])
         ])
         
         # Build metrics string
@@ -214,11 +205,11 @@ class QueryEngine:
                 if value is not None:
                     metrics_str += f"- {key.upper()}: {value}\n"
         
-        # Build conversation history string
+        # Build conversation history
         history_str = ""
         if conversation_history:
             history_str = "\n\nPrevious Conversation:\n"
-            for msg in conversation_history[-3:]:  # Last 3 messages
+            for msg in conversation_history[-3:]:
                 history_str += f"{msg['role']}: {msg['content']}\n"
         
         # Create prompt
@@ -251,7 +242,7 @@ Question: {query}
 Please provide a helpful answer based on the context and metrics provided.""")
         ])
         
-        # Generate response
+        # Generate response (blocking operation, but we're in thread pool)
         messages = prompt.format_messages(
             context=context_str,
             metrics=metrics_str,
@@ -260,10 +251,7 @@ Please provide a helpful answer based on the context and metrics provided.""")
         )
         
         try:
-            # Run blocking LLM call in thread pool
-            loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(_llm_thread_pool, self.llm.invoke, messages)
-            
+            response = self.llm.invoke(messages)
             if hasattr(response, 'content'):
                 return response.content
             return str(response)
