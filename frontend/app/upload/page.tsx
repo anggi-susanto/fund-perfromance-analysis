@@ -7,6 +7,7 @@ import { documentApi } from '@/lib/api'
 
 export default function UploadPage() {
   const [uploading, setUploading] = useState(false)
+  const [selectedFundId, setSelectedFundId] = useState<number>(1)
   const [uploadStatus, setUploadStatus] = useState<{
     status: 'idle' | 'uploading' | 'processing' | 'success' | 'error'
     message?: string
@@ -22,7 +23,7 @@ export default function UploadPage() {
     setUploadStatus({ status: 'uploading', message: 'Uploading file...' })
 
     try {
-      const result = await documentApi.upload(file)
+      const result = await documentApi.upload(file, selectedFundId)
       
       setUploadStatus({
         status: 'processing',
@@ -40,7 +41,7 @@ export default function UploadPage() {
       })
       setUploading(false)
     }
-  }, [])
+  }, [selectedFundId])
 
   const pollDocumentStatus = async (documentId: number) => {
     const maxAttempts = 60 // 5 minutes max
@@ -50,10 +51,17 @@ export default function UploadPage() {
       try {
         const status = await documentApi.getStatus(documentId)
         
-        if (status.status === 'completed') {
+        if (status.status === 'completed' || status.status === 'completed_with_errors') {
+          const isSuccess = status.status === 'completed'
+          const hasErrors = status.status === 'completed_with_errors'
+          
           setUploadStatus({
-            status: 'success',
-            message: 'Document processed successfully!',
+            status: isSuccess ? 'success' : 'error',
+            message: isSuccess 
+              ? 'Document processed successfully!'
+              : hasErrors
+              ? 'Document processed with some errors. Some data may not have been extracted.'
+              : 'Document processed but check for warnings',
             documentId
           })
           setUploading(false)
@@ -103,6 +111,27 @@ export default function UploadPage() {
         <h1 className="text-4xl font-bold mb-2">Upload Fund Document</h1>
         <p className="text-gray-600">
           Upload a PDF fund performance report to automatically extract and analyze data
+        </p>
+      </div>
+
+      {/* Fund Selector */}
+      <div className="mb-6">
+        <label htmlFor="fund-select" className="block text-sm font-medium text-gray-700 mb-2">
+          Select Fund
+        </label>
+        <select
+          id="fund-select"
+          value={selectedFundId}
+          onChange={(e) => setSelectedFundId(Number(e.target.value))}
+          disabled={uploading}
+          className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          <option value={1}>Fund 1 - Example Fund A</option>
+          <option value={2}>Fund 2 - Example Fund B</option>
+          <option value={3}>Fund 3 - Example Fund C</option>
+        </select>
+        <p className="text-sm text-gray-500 mt-1">
+          Select the fund this document belongs to
         </p>
       </div>
 

@@ -140,7 +140,11 @@ class QueryEngine:
                 "sources": [
                     {
                         "content": doc["content"][:200],
-                        "document_id": doc.get("document_id"),
+                        "metadata": {
+                            "document_id": doc.get("document_id"),
+                            "page": doc.get("page"),
+                            "fund_id": doc.get("fund_id")
+                        },
                         "score": doc.get("score")
                     }
                     for doc in relevant_docs[:3]

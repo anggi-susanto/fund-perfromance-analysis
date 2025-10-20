@@ -3,7 +3,7 @@ Document Pydantic schemas
 """
 from pydantic import BaseModel
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Dict, Any, List
 
 
 class DocumentBase(BaseModel):
@@ -21,6 +21,9 @@ class DocumentUpdate(BaseModel):
     """Document update schema"""
     parsing_status: Optional[str] = None
     error_message: Optional[str] = None
+    processing_stats: Optional[Dict[str, Any]] = None
+    page_count: Optional[int] = None
+    chunk_count: Optional[int] = None
 
 
 class Document(DocumentBase):
@@ -30,6 +33,9 @@ class Document(DocumentBase):
     upload_date: datetime
     parsing_status: str
     error_message: Optional[str] = None
+    processing_stats: Optional[Dict[str, Any]] = None
+    page_count: Optional[int] = None
+    chunk_count: Optional[int] = None
     
     class Config:
         from_attributes = True
@@ -41,6 +47,10 @@ class DocumentStatus(BaseModel):
     status: str
     progress: Optional[float] = None
     error_message: Optional[str] = None
+    processing_stats: Optional[Dict[str, Any]] = None
+    page_count: Optional[int] = None
+    chunk_count: Optional[int] = None
+    errors: Optional[List[str]] = None  # Extracted from processing_stats for convenience
 
 
 class DocumentUploadResponse(BaseModel):

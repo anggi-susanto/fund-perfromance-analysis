@@ -3,6 +3,7 @@ Improved Vector Store with proper async/sync separation and resource management
 """
 from typing import List, Dict, Any, Optional
 import numpy as np
+import json
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from langchain_openai import OpenAIEmbeddings
@@ -153,7 +154,9 @@ class VectorStore:
             return ids
             
         except Exception as e:
+            import traceback
             print(f"Error adding documents: {e}")
+            print(f"Full traceback:\n{traceback.format_exc()}")
             self.db.rollback()
             raise
     
@@ -173,7 +176,7 @@ class VectorStore:
         """Synchronous database insert (runs in thread pool)"""
         ids = []
         
-        for text, embedding, metadata in zip(texts, embeddings, metadata_list):
+        for text_content, embedding, metadata in zip(texts, embeddings, metadata_list):
             embedding_str = str(embedding)
             
             insert_sql = text("""
@@ -188,9 +191,9 @@ class VectorStore:
                 "document_id": metadata.get("document_id"),
                 "fund_id": metadata.get("fund_id"),
                 "chunk_index": metadata.get("chunk_index", 0),
-                "content": text,
+                "content": text_content,
                 "embedding": embedding_str,
-                "metadata": str(metadata)
+                "metadata": json.dumps(metadata)  # Convert to JSON string
             })
             
             row = result.fetchone()

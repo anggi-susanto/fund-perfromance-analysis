@@ -100,17 +100,43 @@ async def process_document_task(document_id: int, file_path: str, fund_id: int):
         processor = DocumentProcessor()
         result = await processor.process_document(file_path, document_id, fund_id, db)
         
-        # Update status
+        # Update document with results
         document.parsing_status = result["status"]
+        stats = result.get("statistics", {})
+        document.processing_stats = stats
+        document.page_count = stats.get("total_pages")
+        document.chunk_count = stats.get("text_chunks")
+        
+        # Set error_message based on status
         if result["status"] == "failed":
             document.error_message = result.get("error")
+        elif result["status"] == "completed_with_errors" and stats.get("errors"):
+            # For completed_with_errors, store first few errors as summary
+            error_list = stats.get("errors", [])
+            document.error_message = "; ".join(error_list[:3])  # First 3 errors
+        
         db.commit()
+        
+        # Log summary
+        print(f"\n[Document {document_id}] Processing complete:")
+        print(f"  Status: {result['status']}")
+        print(f"  Pages: {stats.get('total_pages', 0)}")
+        print(f"  Tables: {stats.get('tables_found', 0)}")
+        print(f"  Capital Calls: {stats.get('capital_calls', 0)}")
+        print(f"  Distributions: {stats.get('distributions', 0)}")
+        print(f"  Adjustments: {stats.get('adjustments', 0)}")
+        print(f"  Text Chunks: {stats.get('text_chunks', 0)}")
+        if stats.get("errors"):
+            print(f"  Errors: {len(stats['errors'])}")
+            for i, err in enumerate(stats["errors"][:3], 1):
+                print(f"    {i}. {err}")
         
     except Exception as e:
         document = db.query(Document).filter(Document.id == document_id).first()
         document.parsing_status = "failed"
         document.error_message = str(e)
         db.commit()
+        print(f"\n[Document {document_id}] Fatal error: {e}")
     finally:
         db.close()
 
@@ -123,10 +149,19 @@ async def get_document_status(document_id: int, db: Session = Depends(get_db)):
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
     
+    # Extract errors from processing_stats for convenience
+    errors = None
+    if document.processing_stats and "errors" in document.processing_stats:
+        errors = document.processing_stats["errors"]
+    
     return DocumentStatus(
         document_id=document.id,
         status=document.parsing_status,
-        error_message=document.error_message
+        error_message=document.error_message,
+        processing_stats=document.processing_stats,
+        page_count=document.page_count,
+        chunk_count=document.chunk_count,
+        errors=errors
     )
 
 
